@@ -12,6 +12,7 @@ from utils import *
 from joblib import Parallel, delayed
 
 
+
 def kernel(ker, X1, X2, gamma):
     K = None
     if not ker or ker == 'primal':
@@ -45,7 +46,7 @@ class JDA:
         self.gamma = gamma
         self.T = T
 
-    def fit(self, Xs, Ys, Xt, Yt):
+    def fit(self, Xs, Ys, Xt):
         '''
         Transform and Predict using 1NN as JDA paper did
         :param Xs: ns * n_feature, source feature
@@ -97,21 +98,23 @@ class JDA:
     
     
 def JDA_core(Xs,Ys, Xt, jda_args, id):
-    try:
-        jda = JDA(kernel_type=jda_args["kernel_type"], dim=jda_args['dim'], lamb=jda_args['lamb'], gamma=jda_args['gamma'])
-        Xs_news, Xt_news = jda.fit(Xs, Ys, Xt)
-    except Exception as e:
-        return False, Xs, Xt, id
+    # try:
+    jda = JDA(kernel_type=jda_args["kernel_type"], dim=jda_args['dim'], lamb=jda_args['lamb'], gamma=jda_args['gamma'])
+    Xs_news, Xt_news = jda.fit(Xs, Ys, Xt)
+    # except Exception as e:
+    #     return False, Xs, Xt, id
     return True, Xs_news, Xt_news, id
 
 
 
 def JDA_search(src_domain, tar_domain, jda_arg_list):
     jda_process = min(128, len(jda_arg_list))
+    print("jda processes:", jda_process)
     Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
     JDA_results = Parallel(n_jobs=jda_process)(delayed(JDA_core)(Xs, Ys, Xt, jda_args, id) for id, jda_args in enumerate(jda_arg_list))
     JDA_cleaned = [result for result in JDA_results if result[0]]
     svm_process = min(128, len(JDA_cleaned) * 10)
+    print("svm processes:", svm_process)
     results = Parallel(n_jobs=svm_process)(delayed(svm_jda)(Xs_new, Ys, Xt_new, Yt, norm=True, id=cleaned[3]) for cleaned in JDA_cleaned for Xs_new, Xt_new in zip(cleaned[1], cleaned[2]))
     results = np.array(results, dtype=np.float32)
     results = results[results[:, 1].argsort()]
@@ -131,16 +134,12 @@ def JDA_search(src_domain, tar_domain, jda_arg_list):
 
 if __name__ == "__main__":
     domain_pairs = [('Art', 'RealWorld'), ('Clipart', 'RealWorld')]
-    kernel_types = ['primal', 'linear', 'rbf']
-    dims = [10, 30, 50]
-    lambs = [0.1, 1, 10]
-    gammas = [0.1, 1, 10]
-    jda_arg_list = []
-    for kernel_type in kernel_types:
-        for dim in dims:
-            for lamb in lambs:
-                for gamma in gammas:
-                    jda_arg_list.append({"kernel_type": kernel_type, "dim": dim, "lamb": lamb, "gamma": gamma})
-    JDA_results =  [JDA_search('Art', 'RealWorld', jda_arg_list), JDA_search("Clipart", "RealWorld", jda_arg_list)]
-    for acc, arg, log in JDA_results:
-        print(log)
+    for src, tar in domain_pairs:
+        Xs, Ys, Xt, Yt = load_data(src, tar)
+        stats, Xs_news, Xt_news, id = JDA_core(Xs, Ys, Xt, {"kernel_type": "primal", "dim": 30, "lamb": 1, "gamma": 1}, 0)
+        # import pdb; pdb.set_trace()
+        results = Parallel(n_jobs=svm_process)(delayed(svm_classify)(Xs_new, Ys, Xt_new, Yt, norm=True) for Xs_new, Xt_new in zip(Xs_news, Xt_news))
+        acc = max(resutlts)
+        # import pdb; pdb.set_trace()
+        print("Source domain:", src, "Target domain:", tar)
+        print("Acc:", acc)

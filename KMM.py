@@ -4,17 +4,12 @@ Kernel Mean Matching
 #  2. Huang, Jiayuan, et al. "Correcting sample selection bias by unlabeled data." Advances in neural information processing systems. 2006.
 """
 
-import numpy as np
+
 import sklearn.metrics
 from cvxopt import matrix, solvers
-import os
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score
-import argparse
+from utils import *
+from joblib import Parallel, delayed
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--norm', action='store_true')
-args = parser.parse_args()
 
 def kernel(ker, X1, X2, gamma):
     K = None
@@ -29,6 +24,7 @@ def kernel(ker, X1, X2, gamma):
         else:
             K = sklearn.metrics.pairwise.rbf_kernel(np.asarray(X1), None, gamma)
     return K
+
 
 class KMM:
     def __init__(self, kernel_type='linear', gamma=1.0, B=1.0, eps=None):
@@ -67,40 +63,34 @@ class KMM:
         beta = np.array(sol['x'])
         return beta
 
-def load_data(folder, domain):
-    from scipy import io
-    data = io.loadmat(os.path.join(folder, domain + '_fc6.mat'))
-    return data['fts'], data['labels']
 
 
-def knn_classify(Xs, Ys, Xt, Yt, k=1, norm=False):
-    model = KNeighborsClassifier(n_neighbors=k)
-    Ys = Ys.ravel()
-    Yt = Yt.ravel()
-    if norm:
-        from sklearn.preprocessing import StandardScaler
-        scaler = StandardScaler()
-        Xs = scaler.fit_transform(Xs)
-        Xt = scaler.fit_transform(Xt)
-    model.fit(Xs, Ys)
-    Yt_pred = model.predict(Xt)
-    acc = accuracy_score(Yt, Yt_pred)
-    print(f'Accuracy using kNN: {acc * 100:.2f}%')
+
+def run(src_domain, tar_domain):
+    Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
+    print("-------------------------------------------")
+    print('Source:', src_domain, Xs.shape, Ys.shape)
+    print('Target:', tar_domain, Xt.shape, Yt.shape)
+    kmm = KMM(kernel_type='rbf', B=10)
+    beta = kmm.fit(Xs, Xt)
+    Xs_new = beta * Xs
+    results = Parallel(n_jobs=4)(
+        delayed(svm_classify)(source_data, Ys, Xt, Yt, norm=norm) for norm in
+        [True, False] for source_data in [Xs_new, Xs])
+    print("---------------------------")
+    print("Norm On")
+    print("SVM with KMM features:", results[0])
+    print("SVM with original features:", results[1])
+    print("Performance gain with KMM:", results[0] - results[1])
+    print("---------------------------")
+    print("Norm Off")
+    print("SVM with KMM features:", results[2])
+    print("SVM with original features:", results[3])
+    print("Performance gain with KMM:", results[2] - results[3])
+    print("---------------------------")
+    print("-------------------------------------------")
 
 
 if __name__ == "__main__":
-    # download the dataset here: https://www.jianguoyun.com/p/DcNAUg0QmN7PCBiF9asD (Password: qqLA7D)
-    folder = '/home/jindwang/mine/office31'
-    src_domain = 'amazon'
-    tar_domain = 'webcam'
-    Xs, Ys = load_data(folder, src_domain)
-    Xt, Yt = load_data(folder, tar_domain)
-    print('Source:', src_domain, Xs.shape, Ys.shape)
-    print('Target:', tar_domain, Xt.shape, Yt.shape)
-
-    kmm = KMM(kernel_type='rbf', B=10)
-    beta = kmm.fit(Xs, Xt)
-    print(beta)
-    print(beta.shape)
-    Xs_new = beta * Xs
-    knn_classify(Xs_new, Ys, Xt, Yt, k=1, norm=args.norm)
+    run('Art', 'RealWorld')
+    run("Clipart", "RealWorld")

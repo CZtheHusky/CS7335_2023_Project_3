@@ -8,6 +8,8 @@ import scipy.io
 import scipy.linalg
 import sklearn.metrics
 from sklearn.neighbors import KNeighborsClassifier
+from utils import *
+from joblib import Parallel, delayed
 
 
 def kernel(ker, X1, X2, gamma):
@@ -43,7 +45,7 @@ class JDA:
         self.gamma = gamma
         self.T = T
 
-    def fit_predict(self, Xs, Ys, Xt, Yt):
+    def fit(self, Xs, Ys, Xt, Yt):
         '''
         Transform and Predict using 1NN as JDA paper did
         :param Xs: ns * n_feature, source feature
@@ -52,7 +54,6 @@ class JDA:
         :param Yt: nt * 1, target label
         :return: acc, y_pred, list_acc
         '''
-        list_acc = []
         X = np.hstack((Xs.T, Xt.T))
         X /= np.linalg.norm(X, axis=0)
         m, n = X.shape
@@ -63,6 +64,8 @@ class JDA:
 
         M = 0
         Y_tar_pseudo = None
+        Xs_news = []
+        Xt_news = []
         for t in range(self.T):
             N = 0
             M0 = e * e.T * C
@@ -88,24 +91,56 @@ class JDA:
             Z = np.dot(A.T, K)
             Z /= np.linalg.norm(Z, axis=0)
             Xs_new, Xt_new = Z[:, :ns].T, Z[:, ns:].T
+            Xs_news.append(Xs_new)
+            Xt_news.append(Xt_new)
+        return Xs_news, Xt_news
+    
+    
+def JDA_core(Xs,Ys, Xt, jda_args, id):
+    try:
+        jda = JDA(kernel_type=jda_args["kernel_type"], dim=jda_args['dim'], lamb=jda_args['lamb'], gamma=jda_args['gamma'])
+        Xs_news, Xt_news = jda.fit(Xs, Ys, Xt)
+    except Exception as e:
+        return False, Xs, Xt, id
+    return True, Xs_news, Xt_news, id
 
-            clf = KNeighborsClassifier(n_neighbors=1)
-            clf.fit(Xs_new, Ys.ravel())
-            Y_tar_pseudo = clf.predict(Xt_new)
-            acc = sklearn.metrics.accuracy_score(Yt, Y_tar_pseudo)
-            list_acc.append(acc)
-            print('JDA iteration [{}/{}]: Acc: {:.4f}'.format(t + 1, self.T, acc))
-        return acc, Y_tar_pseudo, list_acc
 
 
-if __name__ == '__main__':
-    domains = ['caltech.mat', 'amazon.mat', 'webcam.mat', 'dslr.mat']
-    for i in range(1):
-        for j in range(2):
-            if i != j:
-                src, tar = 'data/' + domains[i], 'data/' + domains[j]
-                src_domain, tar_domain = scipy.io.loadmat(src), scipy.io.loadmat(tar)
-                Xs, Ys, Xt, Yt = src_domain['feas'], src_domain['label'], tar_domain['feas'], tar_domain['label']
-                jda = JDA(kernel_type='primal', dim=30, lamb=1, gamma=1)
-                acc, ypre, list_acc = jda.fit_predict(Xs, Ys, Xt, Yt)
-                print(acc)
+def JDA_search(src_domain, tar_domain, jda_arg_list):
+    jda_process = min(128, len(jda_arg_list))
+    Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
+    JDA_results = Parallel(n_jobs=jda_process)(delayed(JDA_core)(Xs, Ys, Xt, jda_args, id) for id, jda_args in enumerate(jda_arg_list))
+    JDA_cleaned = [result for result in JDA_results if result[0]]
+    svm_process = min(128, len(JDA_cleaned) * 10)
+    results = Parallel(n_jobs=svm_process)(delayed(svm_jda)(Xs_new, Ys, Xt_new, Yt, norm=True, id=cleaned[3]) for cleaned in JDA_cleaned for Xs_new, Xt_new in zip(cleaned[1], cleaned[2]))
+    results = np.array(results, dtype=np.float32)
+    results = results[results[:, 1].argsort()]
+    acc_res = results[:, 0].reshape(-1, 10)
+    best_accs = np.max(acc_res, axis=1)
+    best_arg = jda_arg_list[JDA_cleaned[np.argmax(best_accs)][3]]
+    best_acc = max(best_accs)
+    to_print = ""
+    to_print += "-------------------------------------------\n"
+    to_print += f"Source: {src_domain} Target: {tar_domain}\n"
+    to_print += f"Best Args: {best_arg}\n"
+    to_print += f"Best Performance: {best_acc}\n"
+    to_print += "-------------------------------------------\n"
+    print(to_print)
+    return best_acc, best_arg, to_print
+
+
+if __name__ == "__main__":
+    domain_pairs = [('Art', 'RealWorld'), ('Clipart', 'RealWorld')]
+    kernel_types = ['primal', 'linear', 'rbf']
+    dims = [10, 30, 50]
+    lambs = [0.1, 1, 10]
+    gammas = [0.1, 1, 10]
+    jda_arg_list = []
+    for kernel_type in kernel_types:
+        for dim in dims:
+            for lamb in lambs:
+                for gamma in gammas:
+                    jda_arg_list.append({"kernel_type": kernel_type, "dim": dim, "lamb": lamb, "gamma": gamma})
+    JDA_results =  [JDA_search('Art', 'RealWorld', jda_arg_list), JDA_search("Clipart", "RealWorld", jda_arg_list)]
+    for acc, arg, log in JDA_results:
+        print(log)

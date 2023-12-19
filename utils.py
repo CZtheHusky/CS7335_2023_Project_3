@@ -2,6 +2,9 @@ import csv
 import numpy as np
 from sklearn.metrics import accuracy_score
 from joblib import Parallel, delayed
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
 
 def read_csv_to_array(filename):
     data = []
@@ -15,20 +18,30 @@ def read_csv_to_array(filename):
 
     return array_data
 
-def svm_classify(Xs, Ys, Xt, Yt, norm=False):
-    from sklearn.svm import SVC
+def svm_jda(Xs, Ys, Xt, Yt, norm=False, id=0):
     model = SVC()
     Ys = Ys.ravel()
     Yt = Yt.ravel()
     if norm:
-        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler()
         Xs = scaler.fit_transform(Xs)
         Xt = scaler.fit_transform(Xt)
     model.fit(Xs, Ys)
     Yt_pred = model.predict(Xt)
     acc = accuracy_score(Yt, Yt_pred)
-    # print(f'Accuracy using SVM: {acc * 100:.2f}%')
+    return round(acc, 4), id
+
+def svm_classify(Xs, Ys, Xt, Yt, norm=False):
+    model = SVC()
+    Ys = Ys.ravel()
+    Yt = Yt.ravel()
+    if norm:
+        scaler = StandardScaler()
+        Xs = scaler.fit_transform(Xs)
+        Xt = scaler.fit_transform(Xt)
+    model.fit(Xs, Ys)
+    Yt_pred = model.predict(Xt)
+    acc = accuracy_score(Yt, Yt_pred)
     return round(acc, 4)
 
 def baseline(src_domain, tar_domain):

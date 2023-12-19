@@ -6,15 +6,13 @@
 
 import numpy as np
 import scipy.io
-import bob.learn
-import bob.learn.linear
-import bob.math
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.decomposition import PCA
 from joblib import Parallel, delayed
 from utils import *
+import pygensvd
 
 class GFK:
-    def __init__(self, dim=20):
+    def __init__(self, dim=200):
         '''
         Init func
         :param dim: dimension after GFK
@@ -43,37 +41,26 @@ class GFK:
 
         Ps = self.train_pca(source, mu_source, std_source, 0.99)
         Pt = self.train_pca(target, mu_target, std_target, 0.99)
-        Ps = np.hstack((Ps.weights, scipy.linalg.null_space(Ps.weights.T)))
-        Pt = Pt.weights[:, :self.dim]
+        Ps = np.hstack((Ps, scipy.linalg.null_space(Ps.T)))
+        Pt = Pt[:, :self.dim]
         N = Ps.shape[1]
         dim = Pt.shape[1]
-
         # Principal angles between subspaces
         QPt = np.dot(Ps.T, Pt)
 
-        # [V1,V2,V,Gam,Sig] = gsvd(QPt(1:dim,:), QPt(dim+1:end,:));
         A = QPt[0:dim, :].copy()
         B = QPt[dim:, :].copy()
 
         # Equation (2)
-        [V1, V2, V, Gam, Sig] = bob.math.gsvd(A, B)
+        Gam, Sig, V, V1, V2 = pygensvd.gsvd(A, B, full_matrices=True, extras='uv')
         V2 = -V2
 
-        # Some sanity checks with the GSVD
-        I = np.eye(V1.shape[1])
-        I_check = np.dot(Gam.T, Gam) + np.dot(Sig.T, Sig)
-        assert np.sum(abs(I - I_check)) < 1e-10
-
-        theta = np.arccos(np.diagonal(Gam))
-
+        theta = np.arccos(Gam)
         # Equation (6)
-        B1 = np.diag(0.5 * (1 + (np.sin(2 * theta) / (2. * np.maximum
-        (theta, 1e-20)))))
-        B2 = np.diag(0.5 * ((np.cos(2 * theta) - 1) / (2 * np.maximum(
-            theta, self.eps))))
+        B1 = np.diag(0.5 * (1 + (np.sin(2 * theta) / (2. * np.maximum(theta, 1e-20)))))
+        B2 = np.diag(0.5 * ((np.cos(2 * theta) - 1) / (2 * np.maximum(theta, self.eps))))
         B3 = B2
-        B4 = np.diag(0.5 * (1 - (np.sin(2 * theta) / (2. * np.maximum
-        (theta, self.eps)))))
+        B4 = np.diag(0.5 * (1 - (np.sin(2 * theta) / (2. * np.maximum(theta, self.eps)))))
 
         # Equation (9) of the suplementary matetial
         delta1_1 = np.hstack((V1, np.zeros(shape=(dim, N - dim))))
@@ -91,25 +78,9 @@ class GFK:
 
         delta = np.linalg.multi_dot([delta1, delta2, delta3])
         G = np.linalg.multi_dot([Ps, delta, Ps.T])
-        sqG = scipy.real(scipy.linalg.fractional_matrix_power(G, 0.5))
+        sqG = np.real(scipy.linalg.fractional_matrix_power(G, 0.5))
         Xs_new, Xt_new = np.dot(sqG, Xs.T).T, np.dot(sqG, Xt.T).T
         return G, Xs_new, Xt_new
-
-    def fit_predict(self, Xs, Ys, Xt, Yt):
-        '''
-        Fit and use 1NN to classify
-        :param Xs: ns * n_feature, source feature
-        :param Ys: ns * 1, source label
-        :param Xt: nt * n_feature, target feature
-        :param Yt: nt * 1, target label
-        :return: Accuracy, predicted labels of target domain, and G
-        '''
-        G, Xs_new, Xt_new = self.fit(Xs, Xt)
-        clf = KNeighborsClassifier(n_neighbors=1)
-        clf.fit(Xs_new, Ys.ravel())
-        y_pred = clf.predict(Xt_new)
-        acc = np.mean(y_pred == Yt.ravel())
-        return acc, y_pred, G
 
     def principal_angles(self, Ps, Pt):
         """
@@ -133,25 +104,12 @@ class GFK:
         :param subspace_dim: dim
         :return: a wrapped machine object
         '''
-        t = bob.learn.linear.PCATrainer()
-        machine, variances = t.train(data)
-
-        # For re-shaping, we need to copy...
-        variances = variances.copy()
-
-        # compute variance percentage, if desired
         if isinstance(subspace_dim, float):
-            cummulated = np.cumsum(variances) / np.sum(variances)
-            for index in range(len(cummulated)):
-                if cummulated[index] > subspace_dim:
-                    subspace_dim = index
-                    break
-            subspace_dim = index
-        machine.resize(machine.shape[0], subspace_dim)
-        machine.input_subtract = mu_data
-        machine.input_divide = std_data
-
-        return machine
+            pca = PCA(n_components=subspace_dim, svd_solver='full')
+        else:
+            pca = PCA(n_components=subspace_dim)
+        pca.fit((data - mu_data) / std_data)
+        return pca.components_.T
 
     def znorm(self, data):
         """
@@ -184,23 +142,52 @@ class GFK:
         return np.argmax(d)
 
 
-def run(src_domain, tar_domain):
+def GFK_core(Xs, Xt, dim=200):
+    try:
+        gfk = GFK(dim=dim)
+        G, Xs_new, Xt_new = gfk.fit(Xs, Xt, True)
+    except Exception as e:
+        return False, Xs, Xt, dim
+    return True, Xs_new, Xt_new, dim
+    
+def GFK_search(src_domain, tar_domain, dims):
+    gfk_processes = min(64, len(dims))
+    Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
+    GFK_results = Parallel(n_jobs=gfk_processes)(delayed(GFK_core)(Xs, Xt, dim) for dim in dims)
+    GFK_cleaned = [result for result in GFK_results if result[0]]
+    svm_process = min(64, len(GFK_cleaned))
+    results = Parallel(n_jobs=svm_process)(delayed(svm_classify)(cleaned[1], Ys, cleaned[2], Yt, norm=True) for cleaned in GFK_cleaned)
+    best_dim = GFK_cleaned[np.argmax(results)][3]
+    best_acc = max(results)
+    to_print = ""
+    to_print += "-------------------------------------------\n"
+    to_print += f"Source: {src_domain} Target: {tar_domain}\n"
+    to_print += f"Best Dim: {best_dim}\n"
+    to_print += f"Best Performance: {best_acc}\n"
+    to_print += "-------------------------------------------\n"
+    print(to_print)
+    return best_acc, best_dim
+
+
+def run(src_domain, tar_domain, ):
     Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
     print("-------------------------------------------")
-    print('Source:', src_domain, Xs.shape, Ys.shape)
-    print('Target:', tar_domain, Xt.shape, Yt.shape)
-    gfk = GFK(dim=20)
-    Xs_new, Xt_new = gfk.fit_predict(Xs, Ys, Xt, Yt)
+    print('Source:', src_domain, 'Target:', tar_domain)
+    gfk = GFK(dim=200)
+    G, Xs_new, Xt_new = gfk.fit(Xs, Xt, True)
     results = Parallel(n_jobs=2)([
         delayed(svm_classify)(Xs_new, Ys, Xt_new, Yt, norm=False),
         delayed(svm_classify)(Xs, Ys, Xt, Yt, norm=False)
     ])
-    print("SVM with GFK features:", results[2])
-    print("SVM with original features:", results[3])
-    print("Performance gain with KMM:", results[2] - results[3])
+    print("SVM with GFK features:", results[0])
+    print("SVM with original features:", results[1])
+    print("Performance gain with GFK:", results[0] - results[1])
     print("-------------------------------------------")
 
-
-if __name__ == '__main__':
-    run('Art', 'RealWorld')
-    run("Clipart", "RealWorld")
+if __name__ == "__main__":
+    dims = [10, 25, 50, 100, 200, 400, 800]
+    domain_pairs = [('Art', 'RealWorld'), ('Clipart', 'RealWorld')]
+    GFK_results =  [GFK_search('Art', 'RealWorld', dims), GFK_search("Clipart", "RealWorld", dims)]
+    for (src, tar), (acc, dim) in zip(domain_pairs, GFK_results):
+        print(f"Source: {src} Target: {tar} Best Performance: {acc} Best Dim: {dim}")
+    

@@ -1,7 +1,7 @@
 import csv
 import numpy as np
 from sklearn.metrics import accuracy_score
-
+from joblib import Parallel, delayed
 
 def read_csv_to_array(filename):
     data = []
@@ -30,6 +30,18 @@ def svm_classify(Xs, Ys, Xt, Yt, norm=False):
     acc = accuracy_score(Yt, Yt_pred)
     # print(f'Accuracy using SVM: {acc * 100:.2f}%')
     return round(acc, 4)
+
+def baseline(src_domain, tar_domain):
+    Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
+    result = svm_classify(Xs, Ys, Xt, Yt, norm=True)
+    to_print = ""
+    to_print += "-------------------------------------------\n"
+    to_print += "Baseline: SVM\n"
+    to_print += f"Source: {src_domain} Target: {tar_domain}\n"
+    to_print += f"Acc: {result}\n"
+    to_print += "-------------------------------------------\n"
+    print(to_print)
+    return result
 
 def load_data(source, target):
     source_path = f"./data/{source}_{source}.csv"

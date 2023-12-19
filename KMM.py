@@ -62,35 +62,66 @@ class KMM:
         sol = solvers.qp(K, -kappa, G, h)
         beta = np.array(sol['x'])
         return beta
+    
+    
+    
+def KMM_core(Xs, Xt, b):
+    try:
+        kmm = KMM(kernel_type='rbf', B=b)
+        beta = kmm.fit(Xs, Xt)
+        Xs_new = beta * Xs
+    except Exception as e:
+        return False, Xs, b
+    return True, Xs_new, b
 
 
 
-
-def run(src_domain, tar_domain):
+def KMM_search(src_domain, tar_domain, betas):
+    kmm_process = min(64, len(betas))
     Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
-    print("-------------------------------------------")
-    print('Source:', src_domain, Xs.shape, Ys.shape)
-    print('Target:', tar_domain, Xt.shape, Yt.shape)
-    kmm = KMM(kernel_type='rbf', B=10)
-    beta = kmm.fit(Xs, Xt)
-    Xs_new = beta * Xs
+    KMM_results = Parallel(n_jobs=kmm_process)(delayed(KMM_core)(Xs, Xt, beta) for beta in betas)
+    KMM_cleaned = [result for result in KMM_results if result[0]]
+    svm_process = min(64, len(KMM_cleaned))
+    results = Parallel(n_jobs=svm_process)(delayed(svm_classify)(cleaned[1], Ys, Xt, Yt, norm=True) for cleaned in KMM_cleaned)
+    best_beta = KMM_cleaned[np.argmax(results)][2]
+    best_acc = max(results)
+    to_print = ""
+    to_print += "-------------------------------------------\n"
+    to_print += f"Source: {src_domain} Target: {tar_domain}\n"
+    to_print += f"Best Beta: {best_beta}\n"
+    to_print += f"Best Performance: {best_acc}\n"
+    to_print += "-------------------------------------------\n"
+    print(to_print)
+    return best_acc, best_beta, to_print
+
+
+def run(src_domain, tar_domain, beta=1):
+    Xs, Ys, Xt, Yt = load_data(src_domain, tar_domain)
+    Xs_new = KMM_core(Xs, Xt, beta)
     results = Parallel(n_jobs=4)(
         delayed(svm_classify)(source_data, Ys, Xt, Yt, norm=norm) for norm in
         [True, False] for source_data in [Xs_new, Xs])
-    print("---------------------------")
-    print("Norm On")
-    print("SVM with KMM features:", results[0])
-    print("SVM with original features:", results[1])
-    print("Performance gain with KMM:", results[0] - results[1])
-    print("---------------------------")
-    print("Norm Off")
-    print("SVM with KMM features:", results[2])
-    print("SVM with original features:", results[3])
-    print("Performance gain with KMM:", results[2] - results[3])
-    print("---------------------------")
-    print("-------------------------------------------")
+    to_print = ""
+    to_print += "-------------------------------------------\n"
+    to_print += f"Source: {src_domain} Target: {tar_domain}\n"
+    to_print += f"Beta: {beta}\n"
+    to_print += "Norm On\n"
+    to_print += f"SVM with KMM features: {results[0]}\n"
+    to_print += f"SVM with original features: {results[1]}\n"
+    to_print += f"Performance gain with KMM: {results[0] - results[1]}\n"
+    to_print += "Norm Off\n"
+    to_print += f"SVM with KMM features: {results[2]}\n"
+    to_print += f"SVM with original features: {results[3]}\n"
+    to_print += f"Performance gain with KMM: {results[2] - results[3]}\n"
+    to_print += "-------------------------------------------\n"
+    print(to_print)
+    return results
 
 
 if __name__ == "__main__":
-    run('Art', 'RealWorld')
-    run("Clipart", "RealWorld")
+    domain_pairs = [('Art', 'RealWorld'), ('Clipart', 'RealWorld')]
+    # baseline_results = Parallel(n_jobs=2)(delayed(baseline)(src, tar) for src, tar in domain_pairs)
+    betas = np.linspace(0.1, 128, 128)
+    KMM_results =  [KMM_search('Art', 'RealWorld', betas), KMM_search("Clipart", "RealWorld", betas)]
+    for (src, tar), (acc, beta, log) in zip(domain_pairs, KMM_results):
+        print("Source:", src, "Target:", tar, "Best Beta:", beta, "Best Performance:", acc)

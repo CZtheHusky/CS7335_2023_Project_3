@@ -4,15 +4,14 @@
     @author: Jindong Wang
 """
 
+import numpy as np
 import scipy.io
 import bob.learn
 import bob.learn.linear
 import bob.math
 from sklearn.neighbors import KNeighborsClassifier
-from utils import *
 from joblib import Parallel, delayed
-import numpy as np
-import pygsvd
+from utils import *
 
 class GFK:
     def __init__(self, dim=20):
@@ -57,8 +56,7 @@ class GFK:
         B = QPt[dim:, :].copy()
 
         # Equation (2)
-        # [V1, V2, V, Gam, Sig] = bob.math.gsvd(A, B)
-        # c, s, x, u = pygsvd.gsvd(A, B, extras='u')
+        [V1, V2, V, Gam, Sig] = bob.math.gsvd(A, B)
         V2 = -V2
 
         # Some sanity checks with the GSVD
@@ -107,12 +105,11 @@ class GFK:
         :return: Accuracy, predicted labels of target domain, and G
         '''
         G, Xs_new, Xt_new = self.fit(Xs, Xt)
-        # acc = svm_classify(Xs_new, Ys, Xt_new, Yt)
-        # clf = KNeighborsClassifier(n_neighbors=1)
-        # clf.fit(Xs_new, Ys.ravel())
-        # y_pred = clf.predict(Xt_new)
-        # acc = np.mean(y_pred == Yt.ravel())
-        return Xs_new, Xt_new
+        clf = KNeighborsClassifier(n_neighbors=1)
+        clf.fit(Xs_new, Ys.ravel())
+        y_pred = clf.predict(Xt_new)
+        acc = np.mean(y_pred == Yt.ravel())
+        return acc, y_pred, G
 
     def principal_angles(self, Ps, Pt):
         """
@@ -194,23 +191,13 @@ def run(src_domain, tar_domain):
     print('Target:', tar_domain, Xt.shape, Yt.shape)
     gfk = GFK(dim=20)
     Xs_new, Xt_new = gfk.fit_predict(Xs, Ys, Xt, Yt)
-    results = Parallel(n_jobs=4)([
-        delayed(svm_classify)(Xs_new, Ys, Xt_new, Yt, norm=True),
-        delayed(svm_classify)(Xs, Ys, Xt, Yt, norm=True),
+    results = Parallel(n_jobs=2)([
         delayed(svm_classify)(Xs_new, Ys, Xt_new, Yt, norm=False),
         delayed(svm_classify)(Xs, Ys, Xt, Yt, norm=False)
     ])
-    print("---------------------------")
-    print("Norm On")
-    print("SVM with GFK features:", results[0])
-    print("SVM with original features:", results[1])
-    print("Performance gain with KMM:", results[0] - results[1])
-    print("---------------------------")
-    print("Norm Off")
     print("SVM with GFK features:", results[2])
     print("SVM with original features:", results[3])
     print("Performance gain with KMM:", results[2] - results[3])
-    print("---------------------------")
     print("-------------------------------------------")
 
 

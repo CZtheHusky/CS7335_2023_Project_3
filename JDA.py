@@ -139,7 +139,7 @@ if __name__ == "__main__":
         stats, Xs_news, Xt_news, id = JDA_core(Xs, Ys, Xt, {"kernel_type": "primal", "dim": 30, "lamb": 1, "gamma": 1}, 0)
         # import pdb; pdb.set_trace()
         results = Parallel(n_jobs=10)(delayed(svm_classify)(Xs_new, Ys, Xt_new, Yt, norm=True) for Xs_new, Xt_new in zip(Xs_news, Xt_news))
-        acc = max(resutlts)
+        acc = max(results)
         # import pdb; pdb.set_trace()
         print("Source domain:", src, "Target domain:", tar)
         print("Acc:", acc)

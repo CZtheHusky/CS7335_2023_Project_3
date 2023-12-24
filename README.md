@@ -40,3 +40,9 @@ Best Performance: 0.6541
 -------------------------------------------
 ```
 
+## JDA
+Source domain: Art Target domain: RealWorld
+Acc: 0.7211
+Source domain: Clipart Target domain: RealWorld
+Acc: 0.6355
+
